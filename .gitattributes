@@ -1,0 +1,8 @@
+# Keep Git’s default text handling.
+* text=auto
+
+# Persist LF for shell scripts (required on Linux containers).
+*.sh text eol=lf
+
+# Keep PowerShell scripts CRLF for Windows users.
+*.ps1 text eol=crlf

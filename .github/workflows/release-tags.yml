@@ -1,0 +1,369 @@
+name: Release from Tags
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write  # For creating GitHub releases
+  id-token: write  # For OIDC trusted publishing to PyPI
+
+env:
+  PYTHON_VERSION: "3.12"
+  MAIN_BRANCH: "main"
+  PACKAGE_NAME: "rag2f-plugin-template"
+  IMPORT_NAME: "rag2f_plugin_template"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Required for setuptools-scm
+
+      - name: Check tag commit is on main
+        run: |
+          echo "::group::Checking if tag commit is on ${MAIN_BRANCH}"
+          TAG_COMMIT=$(git rev-parse "$GITHUB_SHA")
+          git fetch origin "${MAIN_BRANCH}":"refs/remotes/origin/${MAIN_BRANCH}" --depth=100
+          if git merge-base --is-ancestor "$TAG_COMMIT" "origin/${MAIN_BRANCH}"; then
+            echo "✅ Tag commit $TAG_COMMIT is on ${MAIN_BRANCH}"
+          else
+            echo "❌ ERROR: The tag does not point to a commit present on ${MAIN_BRANCH}. Release blocked."
+            exit 1
+          fi
+          echo "::endgroup::"
+
+      - name: Determine release type
+        id: release_type
+        run: |
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
+          
+          # Check if it's a pre-release (contains rc, a, or b)
+          if [[ "$TAG_NAME" =~ (rc|a|b)[0-9]+ ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+            echo "Release type: Pre-release (RC/alpha/beta)"
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+            echo "Release type: Stable release"
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "${{ env.PYTHON_VERSION }}"
+      
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install build "setuptools-scm[toml]>=8.0" wheel packaging
+
+      - name: Install dependencies (dev) for checks
+        run: |
+          pip install uv
+          uv pip install --system -e '.[dev]'
+
+      - name: Ruff lint (GitHub annotations)
+        run: ruff check --output-format=github src tests
+
+      - name: Ruff format (check only)
+        run: ruff format --check src tests
+
+      - name: Run tests
+        run: |
+          pytest -v
+
+      - name: Run pip-audit
+        run: |
+          python -m pip install pip-audit
+          pip-audit
+
+      - name: Validate src/ structure
+        run: |
+          echo "::group::Validating src/ directory structure"
+          if [ ! -d "src" ]; then
+            echo "❌ ERROR: /src directory not found!"
+            exit 1
+          fi
+          echo "✅ /src directory exists"
+          package_found=false
+          for dir in src/*/; do
+            if [ -d "$dir" ] && [ -f "${dir}__init__.py" ]; then
+              package_found=true
+              echo "✅ Found package: $(basename "$dir")"
+            fi
+          done
+          if [ -f "src/__init__.py" ]; then
+            package_found=true
+            echo "✅ src/ is also a package"
+          fi
+          if [ "$package_found" = false ]; then
+            echo "❌ ERROR: No importable package found in /src"
+            exit 1
+          fi
+          echo "::endgroup::"
+
+      - name: Validate __init__.py presence
+        run: |
+          echo "::group::Validating __init__.py in all packages"
+          missing_init=()
+          while IFS= read -r -d '' dir; do
+            if [ ! -f "$dir/__init__.py" ]; then
+              missing_init+=("$dir")
+            else
+              echo "✅ $dir has __init__.py"
+            fi
+          done < <(find src -type d -exec sh -c '[ -n "$(find "$1" -maxdepth 1 -name "*.py" -print -quit)" ]' _ {} \; -print0)
+          if [ ${#missing_init[@]} -gt 0 ]; then
+            echo "❌ ERROR: Missing __init__.py in:"
+            printf '  - %s\n' "${missing_init[@]}"
+            exit 1
+          fi
+          echo "::endgroup::"
+
+      - name: Validate pyproject.toml configuration
+        run: |
+          echo "::group::Validating pyproject.toml"
+          if ! grep -q 'dynamic.*=.*\[.*"version".*\]' pyproject.toml; then
+            echo "❌ ERROR: dynamic version not configured"
+            exit 1
+          fi
+          echo "✅ dynamic version configured"
+
+          if ! grep -q "^name[[:space:]]*=[[:space:]]*\"${PACKAGE_NAME}\"" pyproject.toml; then
+            echo "❌ ERROR: pyproject.toml must have project.name = \"${PACKAGE_NAME}\""
+            exit 1
+          fi
+          echo "✅ project.name matches expected package name"
+          
+          if ! grep -q 'setuptools-scm' pyproject.toml; then
+            echo "❌ ERROR: setuptools-scm not in build-system"
+            exit 1
+          fi
+          echo "✅ setuptools-scm configured"
+          if ! grep -q 'local_scheme.*=.*"no-local-version"' pyproject.toml; then
+            echo "❌ ERROR: local_scheme must be no-local-version"
+            exit 1
+          fi
+          echo "✅ local_scheme validated"
+
+          if ! grep -q "write_to.*=.*\"src/${IMPORT_NAME}/_version.py\"" pyproject.toml; then
+            echo "❌ ERROR: [tool.setuptools_scm].write_to must be \"src/${IMPORT_NAME}/_version.py\""
+            exit 1
+          fi
+          echo "✅ write_to configured"
+          
+          if ! grep -q 'where.*=.*\[.*"src".*\]' pyproject.toml; then
+            echo "❌ ERROR: src layout not configured"
+            exit 1
+          fi
+          echo "✅ src layout validated"
+          echo "::endgroup::"
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG="${{ steps.release_type.outputs.tag }}"
+          VERSION="${TAG#v}"
+          # Accept both v0.0.1 and v.0.0.1
+          VERSION="${VERSION#.}"
+
+          # Validate PEP 440 version (fails fast with a clear message)
+          python -c "from packaging.version import Version; Version('$VERSION')" || {
+            echo "❌ ERROR: Invalid version extracted from tag '$TAG' -> '$VERSION' (expected PEP 440 like 0.0.1, 1.2.3rc1)"
+            exit 1
+          }
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION"
+
+          # Force setuptools-scm to use the tag-derived version even if the tag format is unusual.
+          echo "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_RAG2F=$VERSION" >> $GITHUB_ENV
+
+      - name: Update plugin.json version (no commit, no fail)
+        shell: bash
+        env:
+          PLUGIN_VERSION: ${{ steps.dev_version.outputs.version }}
+        run: |
+          echo "::group::Updating plugin.json version"
+          if [ ! -f "plugin.json" ]; then
+            echo "⚠️  plugin.json not found, skipping."
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          python - <<'PY' || true
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path("plugin.json")
+          version = os.environ.get("PLUGIN_VERSION")
+
+          if not version:
+            print("⚠️  PLUGIN_VERSION not set, skipping.")
+            raise SystemExit(0)
+
+          try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+          except Exception as e:
+            print(f"⚠️  Cannot parse plugin.json as JSON, skipping. Error: {e}")
+            raise SystemExit(0)
+
+          old = data.get("version")
+          data["version"] = version
+
+          # Pretty write (keeps file valid JSON)
+          path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+          print(f"✅ plugin.json version updated: {old} -> {version}")
+          PY
+
+          echo "Current plugin.json:"
+          cat plugin.json || true
+          echo "::endgroup::"
+
+      - name: Build package
+        run: |
+          echo "Building release version: ${{ steps.version.outputs.version }}"
+          # Build wheel directly from git repo to preserve commit info
+          # Use --no-isolation to access SETUPTOOLS_SCM_PRETEND_VERSION_FOR_* env var if needed
+          python -m build --wheel --no-isolation
+          # Build sdist for source distribution
+          python -m build --sdist --no-isolation
+
+      - name: Verify build contents
+        run: |
+          echo "::group::Build artifacts"
+          ls -lh dist/
+          echo "Wheel contents:"
+          pip install wheel
+          for whl in dist/*.whl; do
+            echo "Contents of $whl:"
+            unzip -l "$whl" | head -50
+          done
+
+          echo "::endgroup::"
+
+      - name: Verify wheel contains only src/
+        run: |
+          echo "::group::Verifying wheel does not include repo-only files"
+          WHEEL_FILE=$(ls dist/*.whl | head -1)
+          if python -m zipfile -l "$WHEEL_FILE" | grep -E '^(plugins/|tests/|test/|temp/|scripts/)' -q; then
+            echo "❌ ERROR: Wheel includes files outside src/ (plugins/tests/temp/scripts detected)"
+            python -m zipfile -l "$WHEEL_FILE" | grep -E 'plugins/|tests/|test/|temp/|scripts/' || true
+            exit 1
+          fi
+          if ! python -m zipfile -l "$WHEEL_FILE" | grep -q "${IMPORT_NAME}/__init__.py"; then
+            echo "❌ ERROR: ${IMPORT_NAME} package not found in wheel"
+            exit 1
+          fi
+          echo "✅ Wheel contents look OK"
+          echo "::endgroup::"
+
+      - name: Generate SHA256 checksums
+        run: |
+          mkdir -p release-assets
+          (
+            cd dist
+            sha256sum *.whl *.tar.gz
+          ) > release-assets/SHA256SUMS.txt
+          cat release-assets/SHA256SUMS.txt
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: ${{ steps.release_type.outputs.tag }}
+          tag_name: ${{ steps.release_type.outputs.tag }}
+          prerelease: ${{ steps.release_type.outputs.is_prerelease }}
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+            release-assets/SHA256SUMS.txt
+          body: |
+            ## Release ${{ steps.version.outputs.version }}
+            
+            ${{ steps.release_type.outputs.is_prerelease == 'true' && '⚠️ This is a pre-release version' || '✅ Stable release' }}
+            
+            ### Installation
+            
+            ```bash
+            pip install ${{ env.PACKAGE_NAME }}==${{ steps.version.outputs.version }}
+            ```
+            
+            ### Version Information
+            
+            To check the installed version and commit:
+            
+            ```python
+            from ${{ env.IMPORT_NAME }}._version import __version__, __commit__, __distance__
+            print(f"Version: {__version__}")
+            print(f"Commit: {__commit__}")
+            print(f"Distance from tag: {__distance__}")
+            ```
+            
+            ### Artifacts
+            
+            - Source distribution (`.tar.gz`)
+            - Wheel distribution (`.whl`)
+            - SHA256 checksums (`SHA256SUMS.txt`)
+            
+            ### Verify checksums
+            
+            ```bash
+            sha256sum -c SHA256SUMS.txt
+            ```
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Smoke test - Install and verify
+        run: |
+          echo "::group::Smoke test - installing from PyPI"
+          
+          # Wait for PyPI to propagate
+          sleep 60
+          
+          # Create fresh venv
+          python -m venv test-env
+          source test-env/bin/activate
+          
+          # Install from PyPI
+          pip install "${PACKAGE_NAME}==${{ steps.version.outputs.version }}"
+          
+          # Verify installation
+          EXPECTED_VERSION="${{ steps.version.outputs.version }}"
+          export EXPECTED_VERSION
+          python - <<'PY'
+          import importlib
+          import os
+
+          import_name = os.environ["IMPORT_NAME"]
+          expected = os.environ["EXPECTED_VERSION"]
+
+          module = importlib.import_module(import_name)
+          print(f"✅ Successfully imported {import_name}")
+
+          version = getattr(module, "__version__", None)
+          commit = getattr(module, "__commit__", None)
+          distance = getattr(module, "__distance__", None)
+          print(f"Version: {version}")
+          print(f"Commit: {commit}")
+          print(f"Distance: {distance}")
+
+          if version != expected:
+              raise SystemExit(f"❌ Version mismatch! Expected {expected}, got {version}")
+          print("✅ Version matches tag")
+          PY
+          
+          deactivate
+          echo "::endgroup::"

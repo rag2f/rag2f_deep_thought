@@ -1,0 +1,49 @@
+{
+  "name": "${localWorkspaceFolderBasename} Devcontainer",
+  "image": "python:3.12",
+  "mounts": [
+    "source=${localWorkspaceFolderBasename}-venv,target=/workspaces/${localWorkspaceFolderBasename}/.venv,type=volume"
+  ],
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "version": "latest"
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "version": "latest",
+      "moby": false
+    },
+    "ghcr.io/devcontainers/features/python:1": {
+    "version": "3.12"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff",
+        "ms-azuretools.vscode-docker",
+        "usernamehw.errorlens",
+        "gruntfuggly.todo-tree"
+      ],
+      "settings": {
+        "ruff.configurationPreference": "filesystemFirst",
+        "[python]": {
+          "editor.defaultFormatter": "charliermarsh.ruff",
+          "editor.formatOnSave": true,
+          "editor.codeActionsOnSave": {
+            "source.organizeImports.ruff": "always",
+            "source.fixAll.ruff": "explicit"
+          }
+        }
+      }
+    }
+  },
+  "postCreateCommand": "(sudo chown -R vscode:vscode /workspaces/${localWorkspaceFolderBasename}/.venv 2>/dev/null || true) && git add --renormalize . && bash scripts/bootstrap-venv.sh",
+  "postStartCommand": ". .venv/bin/activate && pip install uv && uv pip install -e . --index-url https://pypi.org/simple/ --extra-index-url https://test.pypi.org/simple/ --index-strategy unsafe-best-match --no-build-isolation && pre-commit install",
+  "remoteUser": "vscode",
+  "containerEnv": {
+    "PYTHONPATH": "/workspaces/${localWorkspaceFolderBasename}/src",
+    "PYTEST_RICH": "1"
+  }
+}
