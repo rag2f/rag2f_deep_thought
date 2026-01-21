@@ -12,8 +12,8 @@ permissions:
 env:
   PYTHON_VERSION: "3.12"
   MAIN_BRANCH: "main"
-  PACKAGE_NAME: "rag2f-plugin-template"
-  IMPORT_NAME: "rag2f_plugin_template"
+  PACKAGE_NAME: "rag2f-deep-thought"
+  IMPORT_NAME: "rag2f_deep_thought"
 
 jobs:
   release:
