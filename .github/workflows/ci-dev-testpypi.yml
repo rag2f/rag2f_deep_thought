@@ -1,12 +1,13 @@
 name: CI Dev - TestPyPI
 
-on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+# Commented out to disable the workflow
+# on:
+#   push:
+#     branches:
+#       - main
+#   pull_request:
+#     branches:
+#       - main
 
 permissions:
   contents: read

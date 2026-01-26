@@ -1,9 +1,10 @@
 name: Release from Tags
 
-on:
-  push:
-    tags:
-      - 'v*'
+# Commented out to disable the workflow
+# on:
+#   push:
+#     tags:
+#       - 'v*'
 
 permissions:
   contents: write  # For creating GitHub releases
