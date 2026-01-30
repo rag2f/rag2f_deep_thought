@@ -17,7 +17,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "rag2f>=0.0.1dev14,<0.0.2",
+    "rag2f==0.0.1dev16,<0.0.2",
     "duckdb",
     "rag2f-openai-embedder>=0.0.1,<0.0.8"
 ]

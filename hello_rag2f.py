@@ -1,5 +1,6 @@
 import asyncio
 
+from rag2f.core.dto.indiana_jones_dto import ReturnMode
 from rag2f.core.rag2f import RAG2F
 
 
@@ -54,6 +55,32 @@ async def main():
     else:
         print(
             f"\n❌ Status: error\n📝 Code: {result.detail.code}\n📝 Message: {result.detail.message}"
+        )
+
+    # RAG retrieval/search example
+    # This plugin implements a simple lexical search over stored texts.
+    query = "hello "
+
+    retrieve = rag2f.indiana_jones.execute_retrieve(query, k=5)
+    if retrieve.is_ok():
+        print(f"\n🔎 Retrieve results for {query!r}:")
+        for i, item in enumerate(retrieve.items, start=1):
+            print(f"  {i}. score={item.score} text={item.text!r}")
+    else:
+        print(
+            f"\n❌ Retrieve error\n📝 Code: {retrieve.detail.code}\n📝 Message: {retrieve.detail.message}"
+        )
+
+    search = rag2f.indiana_jones.execute_search(query, k=5, return_mode=ReturnMode.WITH_ITEMS)
+    if search.is_ok():
+        print(f"\n🧩 Search response for {query!r}: {search.response!r}")
+        if search.items:
+            print("\n📚 Sources:")
+            for i, item in enumerate(search.items, start=1):
+                print(f"  {i}. id={item.id} score={item.score} text={item.text!r}")
+    else:
+        print(
+            f"\n❌ Search error\n📝 Code: {search.detail.code}\n📝 Message: {search.detail.message}"
         )
 
 
