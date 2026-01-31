@@ -37,12 +37,15 @@ def _simple_lexical_score(query: str, text: str) -> float:
 
 
 @hook("indiana_jones_retrieve", priority=10)
-def indiana_jones_retrieve(result, query: str, k: int, rag2f):
+def indiana_jones_retrieve(
+    result, query: str, k: int, return_mode: ReturnMode, for_synthesize: bool, rag2f
+):
     """Retrieve matching items using a lexical scan.
 
     This is intentionally simple: it scans stored texts in DuckDB and returns
     the top-k matches by a naive lexical score.
     """
+    del return_mode, for_synthesize  # Unused in this simple lexical implementation
     repository_id = get_repository_id(rag2f)
     get_result = rag2f.xfiles.execute_get(repository_id)
     if not get_result.is_ok() or get_result.repository is None:
@@ -87,18 +90,14 @@ def indiana_jones_retrieve(result, query: str, k: int, rag2f):
     return result
 
 
-@hook("indiana_jones_search", priority=10)
-def indiana_jones_search(result, query: str, k: int, return_mode: ReturnMode, kwargs, rag2f):
-    """Search (retrieve + synthesize) using the lexical retriever.
+@hook("indiana_jones_synthesize", priority=10)
+def indiana_jones_synthesize(result, retrieve_result, return_mode: ReturnMode, kwargs, rag2f):
+    """Synthesize a response from retrieved items.
 
     Without a generator/LLM backend, we "synthesize" by returning the best
-    matching item text.
+    matching item text. The retrieval is already done by the framework.
     """
-    retrieve_result = rag2f.indiana_jones.execute_retrieve(query, k=k)
-    if not retrieve_result.is_ok():
-        result.status = "error"
-        result.detail = retrieve_result.detail
-        return result
+    del kwargs, rag2f  # Unused in this simple implementation
 
     items = retrieve_result.items
     if not items:
