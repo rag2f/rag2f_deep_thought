@@ -8,7 +8,7 @@ from rag2f.core.morpheus.decorators import hook
 from rag2f.core.rag2f import RAG2F
 from rag2f.core.xfiles import QuerySpec, eq
 
-from .bootstrap_repository import get_repository_id
+from .bootstrap import get_repository_id
 from .plugin_context import get_plugin_id
 
 logger = logging.getLogger(__name__)

@@ -5,7 +5,7 @@ from rag2f.core.dto.result_dto import StatusCode, StatusDetail
 from rag2f.core.morpheus.decorators import hook
 from rag2f.core.xfiles import QuerySpec
 
-from .bootstrap_repository import get_repository_id
+from .bootstrap import get_repository_id
 
 logger = logging.getLogger(__name__)
 
