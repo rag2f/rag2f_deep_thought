@@ -5,7 +5,7 @@ from rag2f.core.dto.result_dto import StatusCode, StatusDetail
 from rag2f.core.morpheus.decorators import hook
 from rag2f.core.xfiles import QuerySpec
 
-from .bootstrap import get_repository_id
+from .bootstrap import TABLE_RAW_INPUTS, get_repository_id
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ def indiana_jones_retrieve(
     the top-k matches by a naive lexical score.
     """
     del return_mode, for_synthesize  # Unused in this simple lexical implementation
-    repository_id = get_repository_id(rag2f)
+    repository_id = get_repository_id(rag2f, TABLE_RAW_INPUTS)
     get_result = rag2f.xfiles.execute_get(repository_id)
     if not get_result.is_ok() or get_result.repository is None:
         msg = get_result.detail.message if get_result.detail else "Unknown error"

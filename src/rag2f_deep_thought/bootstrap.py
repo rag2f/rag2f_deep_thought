@@ -10,37 +10,32 @@ logger = logging.getLogger(__name__)
 
 
 # Repository ID constant for consistent access
-POSTFIX_REPOSITORY_ID = "duckdb_raw_inputs"
+TABLE_RAW_INPUTS = "raw_inputs"
 
 
 @plugin
 def activated(plugin: Plugin, rag2f_instance: RAG2F):
     """Bootstrap DuckDB text repository from plugin configuration.
 
-    This hook initializes and registers the DuckDBTextRepository
+    This hook initializes and registers the RawInputsRepository
     for text storage and deduplication.
 
     Configuration is retrieved using the plugin ID: 'rag2f_deep_thought'
 
     Optional configuration:
     - db_path: Path to DuckDB database file (default: ":memory:")
-    - table_name: Table name for texts (default: "texts")
-    - repo_name: Repository display name (default: "deep_thought_texts")
 
     Example JSON configuration:
     {
       "plugins": {
         "rag2f_deep_thought": {
           "db_path": "/path/to/data.duckdb",
-          "table_name": "texts",
-          "repo_name": "deep_thought_texts"
         }
       }
     }
 
     Example environment variables:
     RAG2F__PLUGINS__RAG2F_DEEP_THOUGHT__DB_PATH=/path/to/data.duckdb
-    RAG2F__PLUGINS__RAG2F_DEEP_THOUGHT__TABLE_NAME=texts
 
     Args:
         repositories_registry: Dictionary to populate with repositories
@@ -62,23 +57,21 @@ def activated(plugin: Plugin, rag2f_instance: RAG2F):
 
     try:
         # Import repository (lazy import)
-        from .duckdb_repository import DuckDBTextRepository
+        from src.rag2f_deep_thought.repository_raw_inputs import RawInputsRepository
 
         # Extract configuration with defaults
         db_path = config.get("db_path", ":memory:")
-        table_name = config.get("table_name", "texts")
-        repo_name = config.get("repo_name", get_repository_id(rag2f_instance))
+        table_name = TABLE_RAW_INPUTS
 
         # Create repository instance
-        repository = DuckDBTextRepository(
+        repository = RawInputsRepository(
             db_path=db_path,
-            table_name=table_name,
-            repo_name=repo_name,
+            table_name=table_name,  # Use a fixed table name for consistency; can be made configurable if needed
         )
 
         # Register with metadata for searchability (Result Pattern)
         register_result = rag2f_instance.xfiles.execute_register(
-            get_repository_id(rag2f_instance),
+            get_repository_id(rag2f_instance, table_name),
             repository,
             meta={
                 "type": "duckdb",
@@ -92,25 +85,25 @@ def activated(plugin: Plugin, rag2f_instance: RAG2F):
             if register_result.created:
                 logger.info(
                     "DuckDB repository registered as '%s' (db_path=%s, table=%s)",
-                    get_repository_id(rag2f_instance),
+                    get_repository_id(rag2f_instance, table_name),
                     db_path,
                     table_name,
                 )
             else:
                 logger.warning(
                     "DuckDB repository '%s' already registered (skipped)",
-                    get_repository_id(rag2f_instance),
+                    get_repository_id(rag2f_instance, table_name),
                 )
         else:
             logger.error(
                 "Failed to register DuckDB repository '%s': %s",
-                get_repository_id(rag2f_instance),
+                get_repository_id(rag2f_instance, table_name),
                 register_result.detail.message if register_result.detail else "Unknown error",
             )
 
     except ImportError as e:
         logger.error(
-            "Failed to import DuckDBTextRepository. Ensure 'duckdb' package is installed: %s", e
+            "Failed to import RawInputsRepository. Ensure 'duckdb' package is installed: %s", e
         )
     except Exception as e:
         logger.error("Unexpected error bootstrapping DuckDB repository: %s", e)
@@ -118,13 +111,25 @@ def activated(plugin: Plugin, rag2f_instance: RAG2F):
     return
 
 
-def get_repository_id(rag2f=None) -> str:
+def get_repository_id(rag2f: RAG2F, table_name: str) -> str:
     """Get the repository ID for the DuckDB text repository.
+
+    Args:
+        rag2f: The RAG2F instance, must not be None.
+        table_name: The name of the table, must not be None.
 
     Returns:
         The repository ID string used for registration.
+
+    Raises:
+        ValueError: If rag2f is None or table_name is None.
     """
+    if rag2f is None:
+        raise ValueError("The 'rag2f' instance must not be None.")
+    if table_name is None:
+        raise ValueError("The 'table_name' must not be None.")
+
     # Get plugin_id from RAG2F instance; it may not be necessary to use the rag2f instance if the plugin_id is already set in the context
     plugin_id = get_plugin_id(rag2f)
 
-    return f"{plugin_id}_{POSTFIX_REPOSITORY_ID}"
+    return f"{plugin_id}_{table_name}"

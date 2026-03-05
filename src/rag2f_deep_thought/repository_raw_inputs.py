@@ -33,6 +33,8 @@ from rag2f.core.xfiles.types import (
     WhereNode,
 )
 
+from rag2f_deep_thought.bootstrap import TABLE_RAW_INPUTS
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,7 +42,7 @@ logger = logging.getLogger(__name__)
 SUPPORTED_OPS = ("eq", "ne", "gt", "gte", "lt", "lte", "in", "and", "or", "not")
 
 
-class DuckDBTextRepository(RepositoryNativeMixin):
+class repository_raw_inputs(RepositoryNativeMixin):
     """DuckDB-based repository for text storage.
 
     This repository stores text documents with:
@@ -52,12 +54,7 @@ class DuckDBTextRepository(RepositoryNativeMixin):
     Thread-safe for concurrent access.
     """
 
-    def __init__(
-        self,
-        db_path: str = ":memory:",
-        table_name: str = "texts",
-        repo_name: str = "deep_thought_texts",
-    ):
+    def __init__(self, db_path: str = ":memory:", table_name: str = TABLE_RAW_INPUTS):
         """Initialize DuckDB repository.
 
         Args:
@@ -67,7 +64,7 @@ class DuckDBTextRepository(RepositoryNativeMixin):
         """
         self._db_path = db_path
         self._table_name = table_name
-        self._repo_name = repo_name
+        self._repo_name = self._table_name
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._lock = Lock()
 
@@ -492,4 +489,4 @@ class DuckDBTextRepository(RepositoryNativeMixin):
             logger.info("DuckDB repository connection closed")
 
 
-__all__ = ["DuckDBTextRepository"]
+__all__ = ["repository_raw_inputs"]

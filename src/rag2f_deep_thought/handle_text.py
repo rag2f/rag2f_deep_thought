@@ -8,7 +8,7 @@ from rag2f.core.morpheus.decorators import hook
 from rag2f.core.rag2f import RAG2F
 from rag2f.core.xfiles import QuerySpec, eq
 
-from .bootstrap import get_repository_id
+from .bootstrap import TABLE_RAW_INPUTS, get_repository_id
 from .plugin_context import get_plugin_id
 
 logger = logging.getLogger(__name__)
@@ -84,7 +84,7 @@ def get_id_input_text(id, text, rag2f):
 @hook("check_duplicated_input_text", priority=10)
 def check_duplicated_input_text(duplicated, id, text, rag2f):
     logger.debug(f"Hook object: {check_duplicated_input_text}")
-    repository_id = get_repository_id(rag2f)
+    repository_id = get_repository_id(rag2f, TABLE_RAW_INPUTS)
     # Get repository from XFile using Result Pattern
     get_result = rag2f.xfiles.execute_get(repository_id)
     if not get_result.is_ok() or get_result.repository is None:
@@ -112,7 +112,7 @@ def check_duplicated_input_text(duplicated, id, text, rag2f):
 @hook("handle_text_foreground", priority=10)
 def handle_text_foreground(done, id, text, rag2f: RAG2F):
     logger.debug(f"Hook object: {handle_text_foreground}")
-    repository_id = get_repository_id(rag2f)
+    repository_id = get_repository_id(rag2f, TABLE_RAW_INPUTS)
     # Get repository from XFile using Result Pattern
     get_result = rag2f.xfiles.execute_get(repository_id)
     if not get_result.is_ok() or get_result.repository is None:
