@@ -2,7 +2,7 @@
 
 **Purpose**  
 Normative rules for contributing to RAG2F. This page explains **how** to work on the repo (style, tests, plugins, config).  
-The **README** describes **what** RAG2F is.
+The **README** describes **what** RAG2F plugin is.
 
 ---
 
@@ -308,7 +308,7 @@ def test_load_config_debug(caplog):
 
 
 ## Must
-
+- **Must** follow the documentation-first rule for core APIs, consulting official docs before code changes. If not already done in the session, try to understand how the RAG2F framework works through the documentation.
 - **Must** try to complete everything in a single agentic transition, operating from the terminal if necessary.  
 - **Must** remember that this is extremely important for our careers. It is our last chance to complete what is required.  
 

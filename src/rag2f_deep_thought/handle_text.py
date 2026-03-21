@@ -3,6 +3,7 @@ import logging
 import re
 import unicodedata
 from datetime import datetime
+from typing import Any
 
 from rag2f.core.morpheus.decorators import hook
 from rag2f.core.rag2f import RAG2F
@@ -12,11 +13,57 @@ from .bootstrap import TABLE_RAW_INPUTS, get_repository_id
 from .plugin_context import get_plugin_id
 
 logger = logging.getLogger(__name__)
+OPENAI_EMBEDDER_PLUGIN_ID = "rag2f_openai_embedder"
 
 
 # Collassa *qualsiasi* whitespace Unicode (spazi, tab, newline, righe vuote, ecc.)
 _WS_ALL = re.compile(r"\s+", flags=re.UNICODE)
 _DEDUP_KEY = bytes.fromhex("8c323a051fc680456c2409727cee0f4edd0609062600a51fbdca7edc766a2f9f")
+
+
+def _resolve_embedding_size(rag2f: RAG2F) -> int | None:
+    """Resolve the configured embedding size from Spock or the active embedder."""
+    configured_size = rag2f.config_manager.get_plugin_config(OPENAI_EMBEDDER_PLUGIN_ID, "size")
+    if configured_size is not None:
+        return int(configured_size)
+
+    try:
+        return int(rag2f.optimus_prime.get_default().size)
+    except Exception:
+        return None
+
+
+def _generate_embedding(text: str, rag2f: RAG2F) -> list[float] | None:
+    """Generate an embedding for text using the default embedder when available."""
+    try:
+        embedder = rag2f.optimus_prime.get_default()
+    except Exception as exc:
+        logger.info("Default embedder unavailable, storing null embedding: %s", exc)
+        return None
+
+    embedding = list(embedder.getEmbedding(text))
+    expected_size = _resolve_embedding_size(rag2f)
+    if expected_size is not None and len(embedding) != expected_size:
+        logger.warning(
+            "Embedding discarded because size mismatch (expected=%d, got=%d)",
+            expected_size,
+            len(embedding),
+        )
+        return None
+    return embedding
+
+
+def _backfill_embedding(repository: Any, id: str, embedding: list[float] | None) -> None:
+    """Update an existing document embedding when it was previously null."""
+    if embedding is None:
+        return
+
+    try:
+        existing = repository.get(id, select=["embedding"])
+        if existing.get("embedding") is None:
+            repository.update(id, {"embedding": embedding})
+    except Exception as exc:
+        logger.warning("Failed to backfill embedding for id=%s: %s", id, exc)
 
 
 def _coerce_dedup_key(value) -> bytes:
@@ -129,6 +176,7 @@ def handle_text_foreground(done, id, text, rag2f: RAG2F):
     document = {
         "text": text,
         "created": created,
+        "embedding": _generate_embedding(text, rag2f),
     }
     # Insert using repository CRUD (id is hex string)
     try:
@@ -141,11 +189,9 @@ def handle_text_foreground(done, id, text, rag2f: RAG2F):
 
         if isinstance(e, AlreadyExists):
             logger.debug("Text already exists: %s", id)
+            _backfill_embedding(repository, id, document.get("embedding"))
             done = True
         else:
             logger.error("Error storing text: %s", e)
             done = False
-
-    # default_embedder = rag2f.optimus_prime.get_default()
-    # emb = default_embedder.getEmbedding(text)
     return done

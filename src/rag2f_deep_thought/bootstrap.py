@@ -1,5 +1,7 @@
 import logging
+from contextlib import suppress
 
+import duckdb
 from rag2f.core.morpheus.decorators.plugin_decorator import plugin
 from rag2f.core.morpheus.plugin import Plugin
 from rag2f.core.rag2f import RAG2F
@@ -11,6 +13,40 @@ logger = logging.getLogger(__name__)
 
 # Repository ID constant for consistent access
 TABLE_RAW_INPUTS = "raw_inputs"
+OPENAI_EMBEDDER_PLUGIN_ID = "rag2f_openai_embedder"
+
+
+def _resolve_embedding_size(rag2f_instance: RAG2F) -> int | None:
+    """Resolve embedding size from Spock configuration or the default embedder."""
+    configured_size = rag2f_instance.config_manager.get_plugin_config(
+        OPENAI_EMBEDDER_PLUGIN_ID, "size"
+    )
+    if configured_size is not None:
+        return int(configured_size)
+
+    try:
+        return int(rag2f_instance.optimus_prime.get_default().size)
+    except Exception:
+        return None
+
+
+def _check_vss_availability(db_path: str, embedding_size: int | None) -> bool:
+    """Check whether DuckDB VSS can be enabled for this repository."""
+    if embedding_size is None:
+        return False
+
+    connection = duckdb.connect(db_path)
+    try:
+        with suppress(Exception):
+            connection.execute("INSTALL vss")
+        connection.execute("LOAD vss")
+    except Exception:
+        logger.warning("VSS unavailable: using DuckDB exact vector search fallback.")
+        return False
+    finally:
+        connection.close()
+
+    return True
 
 
 @plugin
@@ -57,16 +93,20 @@ def activated(plugin: Plugin, rag2f_instance: RAG2F):
 
     try:
         # Import repository (lazy import)
-        from src.rag2f_deep_thought.repository_raw_inputs import RawInputsRepository
+        from .repository_raw_inputs import RawInputsRepository
 
         # Extract configuration with defaults
         db_path = config.get("db_path", ":memory:")
         table_name = TABLE_RAW_INPUTS
+        embedding_size = _resolve_embedding_size(rag2f_instance)
+        vss_available = _check_vss_availability(db_path, embedding_size)
 
         # Create repository instance
         repository = RawInputsRepository(
             db_path=db_path,
             table_name=table_name,  # Use a fixed table name for consistency; can be made configurable if needed
+            embedding_size=embedding_size,
+            enable_hnsw=vss_available,
         )
 
         # Register with metadata for searchability (Result Pattern)
@@ -78,6 +118,8 @@ def activated(plugin: Plugin, rag2f_instance: RAG2F):
                 "domain": "texts",
                 "plugin": plugin_id,
                 "table": table_name,
+                "embedding_size": embedding_size,
+                "vector_search": repository.capabilities().vector_search.supported,
             },
         )
 

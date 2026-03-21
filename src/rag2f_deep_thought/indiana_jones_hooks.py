@@ -3,49 +3,44 @@ import logging
 from rag2f.core.dto.indiana_jones_dto import RetrievedItem, ReturnMode
 from rag2f.core.dto.result_dto import StatusCode, StatusDetail
 from rag2f.core.morpheus.decorators import hook
-from rag2f.core.xfiles import QuerySpec
 
 from .bootstrap import TABLE_RAW_INPUTS, get_repository_id
 
 logger = logging.getLogger(__name__)
+OPENAI_EMBEDDER_PLUGIN_ID = "rag2f_openai_embedder"
 
 
-def _simple_lexical_score(query: str, text: str) -> float:
-    """Compute a simple lexical relevance score.
+def _resolve_query_embedding(query: str, rag2f) -> list[float] | None:
+    """Build the query embedding using the default embedder."""
+    try:
+        embedder = rag2f.optimus_prime.get_default()
+    except Exception as exc:
+        logger.error("Default embedder unavailable for retrieval: %s", exc)
+        return None
 
-    This plugin stores raw text only (no embeddings). For the tutorial example,
-    we implement a minimal, deterministic scoring:
-    - case-insensitive substring match
-    - score = number of occurrences of query in text
+    try:
+        embedding = list(embedder.getEmbedding(query))
+    except Exception as exc:
+        logger.error("Failed to generate query embedding: %s", exc)
+        return None
 
-    Args:
-        query: Query string.
-        text: Candidate document text.
-
-    Returns:
-        A relevance score (0 means no match).
-    """
-    needle = (query or "").casefold().strip()
-    if not needle:
-        return 0.0
-
-    haystack = (text or "").casefold()
-    if needle not in haystack:
-        return 0.0
-
-    return float(haystack.count(needle))
+    configured_size = rag2f.config_manager.get_plugin_config(OPENAI_EMBEDDER_PLUGIN_ID, "size")
+    if configured_size is not None and len(embedding) != int(configured_size):
+        logger.error(
+            "Query embedding size mismatch (expected=%s, got=%d)",
+            configured_size,
+            len(embedding),
+        )
+        return None
+    return embedding
 
 
 @hook("indiana_jones_retrieve", priority=10)
 def indiana_jones_retrieve(
     result, query: str, k: int, return_mode: ReturnMode, for_synthesize: bool, rag2f
 ):
-    """Retrieve matching items using a lexical scan.
-
-    This is intentionally simple: it scans stored texts in DuckDB and returns
-    the top-k matches by a naive lexical score.
-    """
-    del return_mode, for_synthesize  # Unused in this simple lexical implementation
+    """Retrieve matching items using vector similarity search."""
+    del return_mode, for_synthesize
     repository_id = get_repository_id(rag2f, TABLE_RAW_INPUTS)
     get_result = rag2f.xfiles.execute_get(repository_id)
     if not get_result.is_ok() or get_result.repository is None:
@@ -54,33 +49,33 @@ def indiana_jones_retrieve(
         return result
 
     repository = get_result.repository
-
-    # Pull candidate documents. For a demo plugin this is fine.
-    # (No server-side LIKE filter is exposed via QuerySpec in this repository.)
-    query_all = QuerySpec(select=["id", "text", "created"], limit=10000)
-    try:
-        docs = repository.find(query_all)
-    except Exception as e:
-        logger.error("Repository find() failed: %s", e)
+    query_embedding = _resolve_query_embedding(query, rag2f)
+    if query_embedding is None:
+        result.status = "error"
+        result.detail = StatusDetail(
+            code=StatusCode.INVALID,
+            message="Default embedder is not available or returned an invalid vector",
+        )
         return result
 
-    scored: list[tuple[float, dict]] = []
-    for doc in docs:
-        score = _simple_lexical_score(query, doc.get("text", ""))
-        if score > 0:
-            scored.append((score, doc))
-
-    scored.sort(key=lambda pair: pair[0], reverse=True)
-    top = scored[: max(int(k), 0)] if k is not None else scored
+    try:
+        docs = repository.vector_search(
+            query_embedding,
+            top_k=max(int(k), 0),
+            select=["id", "text", "created"],
+        )
+    except Exception as e:
+        logger.error("Repository vector_search() failed: %s", e)
+        return result
 
     result.items = [
         RetrievedItem(
             id=str(doc.get("id", "")),
             text=str(doc.get("text", "")),
             metadata={"repository_id": repository_id, "created": doc.get("created")},
-            score=float(score),
+            score=float(doc.get("_score")) if doc.get("_score") is not None else None,
         )
-        for score, doc in top
+        for doc in docs
     ]
 
     if not result.items:

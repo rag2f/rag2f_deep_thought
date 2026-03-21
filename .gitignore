@@ -140,4 +140,6 @@ local_*
 # setuptools-scm generated version file
 src/*/_version.py
 
+.ruff_cache/
+
 otherprojects/

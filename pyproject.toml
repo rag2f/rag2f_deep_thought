@@ -90,6 +90,8 @@ norecursedirs = ["rag2f"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
 addopts = "-s -vv -rA --color=yes --maxfail=3"
 
 [tool.ruff]
