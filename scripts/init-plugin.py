@@ -99,7 +99,9 @@ def get_repo_root() -> Path:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Initialize this repository as a new RAG2F plugin.")
+    parser = argparse.ArgumentParser(
+        description="Initialize this repository as a new RAG2F plugin."
+    )
     parser.add_argument(
         "--name",
         dest="plugin_name",

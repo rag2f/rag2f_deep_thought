@@ -19,6 +19,7 @@ classifiers = [
 dependencies = [
     "rag2f>=0.1.4.dev34",
     "duckdb",
+    "redis>=5.0.0",
     "rag2f-openai-embedder>=0.0.1,<0.0.8"
 ]
 

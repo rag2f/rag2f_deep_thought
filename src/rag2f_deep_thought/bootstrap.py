@@ -1,7 +1,9 @@
 import logging
+import os
 from contextlib import suppress
 
 import duckdb
+from rag2f.core.flux_capacitor import InMemoryTaskQueue
 from rag2f.core.morpheus.decorators.plugin_decorator import plugin
 from rag2f.core.morpheus.plugin import Plugin
 from rag2f.core.rag2f import RAG2F
@@ -14,6 +16,19 @@ logger = logging.getLogger(__name__)
 # Repository ID constant for consistent access
 TABLE_RAW_INPUTS = "raw_inputs"
 OPENAI_EMBEDDER_PLUGIN_ID = "rag2f_openai_embedder"
+FLUX_TASK_STORE_TABLE = "flux_tasks"
+FLUX_QUEUE_HOOK_RAW_INPUT_EMBEDDER = "raw_input_embedder"
+
+
+def _config_bool(value, *, default: bool = False) -> bool:
+    """Normalize bool-like configuration values."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 def _resolve_embedding_size(rag2f_instance: RAG2F) -> int | None:
@@ -47,6 +62,53 @@ def _check_vss_availability(db_path: str, embedding_size: int | None) -> bool:
         connection.close()
 
     return True
+
+
+def _register_flux_backends(plugin_id: str, config: dict, rag2f_instance: RAG2F) -> None:
+    """Register FluxCapacitor store and queue backends for async raw input embedding."""
+    from .flux.duckdb_store import DuckDBTaskStore
+
+    store_name = config.get("flux_store_name", f"{plugin_id}_duckdb_tasks")
+    store_db_path = config.get("flux_store_db_path", ":memory:")
+    store_table = config.get("flux_store_table", FLUX_TASK_STORE_TABLE)
+    store = DuckDBTaskStore(db_path=store_db_path, table_name=store_table)
+    rag2f_instance.flux_capacitor.register_store(store_name, store)
+    rag2f_instance.flux_capacitor.set_default_store(store_name)
+
+    queue_backend = str(config.get("flux_queue_backend", "redis")).strip().lower()
+    queue_name = config.get("flux_queue_name", f"{plugin_id}_flux_queue")
+    queue = None
+
+    if queue_backend == "memory":
+        queue = InMemoryTaskQueue()
+    else:
+        try:
+            from .flux.redis_stream_queue import RedisStreamQueueConfig, RedisStreamTaskQueue
+
+            redis_url = config.get("redis_url") or os.getenv("RAG2F_DEEP_THOUGHT_REDIS_URL")
+            redis_url = redis_url or os.getenv("REDIS_URL")
+            redis_config = RedisStreamQueueConfig(
+                url=redis_url,
+                stream_name=config.get("flux_stream_name", f"{plugin_id}:flux:tasks"),
+                group_name=config.get("flux_consumer_group", f"{plugin_id}:flux:workers"),
+                max_len=config.get("flux_stream_max_len", 100_000),
+                block_ms=config.get("flux_stream_block_ms"),
+            )
+            queue = RedisStreamTaskQueue(redis_config)
+        except Exception as exc:
+            if _config_bool(config.get("flux_queue_require_redis")):
+                raise
+            logger.warning("Redis Flux queue unavailable; using in-memory queue: %s", exc)
+            queue = InMemoryTaskQueue()
+
+    rag2f_instance.flux_capacitor.register_queue(queue_name, queue)
+    rag2f_instance.flux_capacitor.set_default_queue(queue_name)
+    logger.info(
+        "Flux backends registered (store=%s, queue=%s, queue_type=%s)",
+        store_name,
+        queue_name,
+        type(queue).__name__,
+    )
 
 
 @plugin
@@ -92,6 +154,8 @@ def activated(plugin: Plugin, rag2f_instance: RAG2F):
         config = {}
 
     try:
+        _register_flux_backends(plugin_id, config, rag2f_instance)
+
         # Import repository (lazy import)
         from .repository_raw_inputs import RawInputsRepository
 

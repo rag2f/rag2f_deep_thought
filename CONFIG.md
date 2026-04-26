@@ -14,8 +14,12 @@ In the main configuration file (e.g. `config.json`), the plugin section should h
 {
   "plugins": {
     "rag2f_deep_thought": {
-      "size": 8,
-      "seed": "optional-seed"
+      "db_path": ":memory:",
+      "flux_store_db_path": ":memory:",
+      "flux_queue_backend": "redis",
+      "redis_url": "redis://:rag2f-devcontainer-redis@redis:6379/0",
+      "flux_stream_name": "rag2f_deep_thought:flux:tasks",
+      "flux_consumer_group": "rag2f_deep_thought:flux:workers"
     }
   }
 }
@@ -30,8 +34,10 @@ Spock also supports environment variables. The format is based on double undersc
 Examples to set the plugin configuration via ENV:
 
 ```bash
-export RAG2F__PLUGINS__RAG2F_PLUGIN_TEMPLATE__SIZE="8"
-export RAG2F__PLUGINS__RAG2F_PLUGIN_TEMPLATE__SEED="optional-seed"
+export RAG2F__PLUGINS__RAG2F_DEEP_THOUGHT__DB_PATH=":memory:"
+export RAG2F__PLUGINS__RAG2F_DEEP_THOUGHT__FLUX_STORE_DB_PATH=":memory:"
+export RAG2F__PLUGINS__RAG2F_DEEP_THOUGHT__FLUX_QUEUE_BACKEND="redis"
+export RAG2F__PLUGINS__RAG2F_DEEP_THOUGHT__REDIS_URL="redis://:rag2f-devcontainer-redis@redis:6379/0"
 ```
 
 Spock will parse types (int, float, bool, JSON) whenever possible.
@@ -52,12 +58,18 @@ plugin_cfg = rag2f.spock.get_plugin_config("rag2f_deep_thought")
 
 After obtaining `plugin_cfg`, the plugin can validate required fields and raise a clear error if any are missing.
 
-### Required parameters
-
-- `size`: Output vector length (int > 0)
-
 ### Optional parameters
 
-- `seed`: String mixed into deterministic generation
+- `db_path`: DuckDB database path for raw inputs. Defaults to `:memory:`.
+- `flux_store_db_path`: DuckDB database path for Flux task state. Defaults to `:memory:`.
+- `flux_store_name`: Registry name for the Flux store.
+- `flux_store_table`: DuckDB table used by the Flux store. Defaults to `flux_tasks`.
+- `flux_queue_backend`: `redis` or `memory`. Defaults to `redis`.
+- `redis_url`: Redis connection URL used by the Redis Stream queue.
+- `flux_stream_name`: Redis Stream key used for Flux task delivery.
+- `flux_consumer_group`: Redis consumer group used by Flux workers.
+- `flux_stream_max_len`: Approximate max stream length. Defaults to `100000`.
+- `flux_queue_require_redis`: When true, activation fails if Redis cannot be configured instead of falling back to memory.
+- `dedup_key`: Hex string, bytes-like value, or JSON list of integers used to derive deterministic input ids.
 
 

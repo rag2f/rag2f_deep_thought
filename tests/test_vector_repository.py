@@ -55,13 +55,15 @@ def test_repository_allows_nullable_embedding_then_update():
     """Documents can be inserted with null embeddings and updated later."""
     repository = RawInputsRepository(embedding_size=3)
 
-    repository.insert("01", {"text": "hello", "embedding": None})
+    repository.insert("01", {"text": "hello", "embedding": None, "flux_task_id": "task-1"})
     first = repository.get("01")
     assert first["embedding"] is None
+    assert first["flux_task_id"] == "task-1"
 
     repository.update("01", {"embedding": [0.1, 0.2, 0.3]})
     updated = repository.get("01")
     assert updated["embedding"] == pytest.approx([0.1, 0.2, 0.3])
+    assert updated["flux_task_id"] == "task-1"
 
 
 def test_repository_vector_search_orders_by_similarity():

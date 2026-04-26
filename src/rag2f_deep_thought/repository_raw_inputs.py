@@ -110,7 +110,8 @@ class RawInputsRepository(RepositoryNativeMixin):
                 id BLOB PRIMARY KEY,
                 text VARCHAR NOT NULL,
                 created TIMESTAMP NOT NULL,
-                embedding {embedding_type}
+                embedding {embedding_type},
+                flux_task_id VARCHAR
             )
         """)
 
@@ -120,6 +121,7 @@ class RawInputsRepository(RepositoryNativeMixin):
         """)
 
         self._ensure_embedding_column_shape()
+        self._ensure_flux_task_id_column()
         self._try_enable_hnsw_index()
 
         logger.info("DuckDB repository schema initialized (table=%s)", self._table_name)
@@ -145,6 +147,13 @@ class RawInputsRepository(RepositoryNativeMixin):
                 f"expected {expected_type}, found {actual_type}. "
                 "Recreate the database or align the configured embedding size."
             )
+
+    def _ensure_flux_task_id_column(self) -> None:
+        """Add the async Flux task id column to existing tables."""
+        column_info = self._conn.execute(f"DESCRIBE {self._table_name}").fetchall()  # noqa: S608
+        if any(row[0] == "flux_task_id" for row in column_info):
+            return
+        self._conn.execute(f"ALTER TABLE {self._table_name} ADD COLUMN flux_task_id VARCHAR")
 
     def _try_enable_hnsw_index(self) -> None:
         """Enable DuckDB VSS/HNSW indexing when available."""
@@ -237,6 +246,7 @@ class RawInputsRepository(RepositoryNativeMixin):
         text = item.get("text", "")
         created = item.get("created", datetime.now())
         embedding = _normalize_embedding(item.get("embedding"), self._embedding_size)
+        flux_task_id = item.get("flux_task_id")
 
         if isinstance(created, str):
             created = datetime.fromisoformat(created)
@@ -244,8 +254,8 @@ class RawInputsRepository(RepositoryNativeMixin):
         try:
             with self._lock:
                 self._conn.execute(
-                    f"INSERT INTO {self._table_name} (id, text, created, embedding) VALUES (?, ?, ?, ?)",  # noqa: S608
-                    [id_bytes, text, created, embedding],
+                    f"INSERT INTO {self._table_name} (id, text, created, embedding, flux_task_id) VALUES (?, ?, ?, ?, ?)",  # noqa: S608
+                    [id_bytes, text, created, embedding, flux_task_id],
                 )
             logger.debug("Inserted document id=%s", id_bytes.hex())
         except duckdb.ConstraintException as exc:
@@ -266,7 +276,7 @@ class RawInputsRepository(RepositoryNativeMixin):
         if existing is None:
             raise NotFound(id=id_bytes.hex(), repository=self._repo_name)
 
-        allowed_fields = {"text", "created", "embedding"}
+        allowed_fields = {"text", "created", "embedding", "flux_task_id"}
         set_clauses = []
         values = []
 
@@ -408,13 +418,13 @@ class RawInputsRepository(RepositoryNativeMixin):
     def _build_select(self, select: list[str] | None) -> str:
         """Build SELECT columns clause."""
         if select is None or not select:
-            return "id, text, created, embedding"
+            return "id, text, created, embedding, flux_task_id"
 
-        valid_columns = {"id", "text", "created", "embedding"}
+        valid_columns = {"id", "text", "created", "embedding", "flux_task_id"}
         columns = [col for col in select if col in valid_columns]
 
         if not columns:
-            return "id, text, created, embedding"
+            return "id, text, created, embedding, flux_task_id"
 
         return ", ".join(columns)
 
@@ -470,7 +480,7 @@ class RawInputsRepository(RepositoryNativeMixin):
 
     def _safe_column(self, field: str) -> str:
         """Validate and return safe column name."""
-        valid_columns = {"id", "text", "created", "embedding"}
+        valid_columns = {"id", "text", "created", "embedding", "flux_task_id"}
         if field not in valid_columns:
             raise NotSupported(
                 f"field:{field}",
@@ -513,9 +523,10 @@ class RawInputsRepository(RepositoryNativeMixin):
                 "text": row[1],
                 "created": row[2].isoformat() if hasattr(row[2], "isoformat") else row[2],
                 "embedding": list(row[3]) if row[3] is not None else None,
+                "flux_task_id": row[4],
             }
 
-        valid_columns = ["id", "text", "created", "embedding"]
+        valid_columns = ["id", "text", "created", "embedding", "flux_task_id"]
         selected = [col for col in select if col in valid_columns]
 
         doc = {}

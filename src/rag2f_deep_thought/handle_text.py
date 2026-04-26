@@ -9,7 +9,7 @@ from rag2f.core.morpheus.decorators import hook
 from rag2f.core.rag2f import RAG2F
 from rag2f.core.xfiles import QuerySpec, eq
 
-from .bootstrap import TABLE_RAW_INPUTS, get_repository_id
+from .bootstrap import FLUX_QUEUE_HOOK_RAW_INPUT_EMBEDDER, TABLE_RAW_INPUTS, get_repository_id
 from .plugin_context import get_plugin_id
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,14 @@ def _generate_embedding(text: str, rag2f: RAG2F) -> list[float] | None:
             len(embedding),
         )
         return None
+    return embedding
+
+
+def _generate_embedding_or_raise(text: str, rag2f: RAG2F) -> list[float]:
+    """Generate an embedding or raise so Flux marks the task as failed."""
+    embedding = _generate_embedding(text, rag2f)
+    if embedding is None:
+        raise RuntimeError("Embedding generation returned no vector")
     return embedding
 
 
@@ -128,6 +136,20 @@ def get_id_input_text(id, text, rag2f):
     return id
 
 
+def _enqueue_raw_input_embedding(rag2f: RAG2F, repository_id: str, track_id: str) -> str:
+    """Enqueue an asynchronous embedding task for a raw input."""
+    plugin_id = get_plugin_id(rag2f)
+    return rag2f.flux_capacitor.enqueue(
+        plugin_id=plugin_id,
+        hook=FLUX_QUEUE_HOOK_RAW_INPUT_EMBEDDER,
+        payload_ref={
+            "repository": repository_id,
+            "id": track_id,
+            "meta": {"track_id": track_id},
+        },
+    )
+
+
 @hook("check_duplicated_input_text", priority=10)
 def check_duplicated_input_text(duplicated, id, text, rag2f):
     logger.debug(f"Hook object: {check_duplicated_input_text}")
@@ -176,11 +198,12 @@ def handle_text_foreground(done, id, text, rag2f: RAG2F):
     document = {
         "text": text,
         "created": created,
-        "embedding": _generate_embedding(text, rag2f),
     }
     # Insert using repository CRUD (id is hex string)
     try:
         repository.insert(id, document)
+        flux_task_id = _enqueue_raw_input_embedding(rag2f, repository_id, id)
+        repository.update(id, {"flux_task_id": flux_task_id})
         logger.debug("Stored text with id: %s", id)
         done = True
     except Exception as e:
@@ -195,3 +218,38 @@ def handle_text_foreground(done, id, text, rag2f: RAG2F):
             logger.error("Error storing text: %s", e)
             done = False
     return done
+
+
+@hook(FLUX_QUEUE_HOOK_RAW_INPUT_EMBEDDER, priority=10)
+def raw_input_embedder(context=None, payload_ref=None, rag2f: RAG2F | None = None, **kwargs):
+    """Consume a Flux task and backfill the raw input embedding."""
+    del kwargs
+    if rag2f is None and context is not None:
+        rag2f = context.rag2f
+    if rag2f is None:
+        raise RuntimeError("RAG2F instance is required to embed raw input")
+    if payload_ref is None and context is not None:
+        payload_ref = context.task.payload_mapping()
+    if not payload_ref:
+        raise RuntimeError("Flux payload_ref is required to embed raw input")
+
+    repository_id = payload_ref.get("repository")
+    track_id = payload_ref.get("id")
+    if not repository_id or not track_id:
+        raise RuntimeError("Flux payload_ref must include repository and id")
+
+    get_result = rag2f.xfiles.execute_get(repository_id)
+    if not get_result.is_ok() or get_result.repository is None:
+        msg = get_result.detail.message if get_result.detail else "Unknown error"
+        raise RuntimeError(f"Failed to get repository '{repository_id}': {msg}")
+
+    repository = get_result.repository
+    document = repository.get(track_id, select=["text", "embedding"])
+    if document.get("embedding") is not None:
+        logger.debug("Raw input already has embedding (id=%s)", track_id)
+        return {"embedded": False, "reason": "already_present", "id": track_id}
+
+    embedding = _generate_embedding_or_raise(str(document["text"]), rag2f)
+    repository.update(track_id, {"embedding": embedding})
+    logger.debug("Raw input embedding stored (id=%s)", track_id)
+    return {"embedded": True, "id": track_id}

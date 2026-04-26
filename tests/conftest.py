@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import os
 import sys
+from urllib.parse import urlsplit, urlunsplit
 
 import pytest
 from rich.traceback import install
 
 from rag2f_deep_thought.plugin_context import reset_plugin_id
+
+TEST_REDIS_DB = 10
 
 # Enable readable tracebacks in development / test environments.
 # Can be disabled with PYTEST_RICH=0
@@ -44,6 +47,60 @@ class StaticEmbedder:
         """Return the predefined embedding for the given text."""
         del normalize
         return self._mapping[text]
+
+
+def _redis_url_for_test_db(url: str, *, db: int = TEST_REDIS_DB) -> str:
+    """Return a Redis URL rewritten to use the dedicated test database."""
+    parsed = urlsplit(url)
+    return urlunsplit((parsed.scheme, parsed.netloc, f"/{db}", parsed.query, parsed.fragment))
+
+
+@pytest.fixture(scope="session")
+def redis_test_url() -> str:
+    """Return the Redis URL pinned to the dedicated test database."""
+    base_url = os.getenv("REDIS_URL", "redis://:rag2f-devcontainer-redis@redis:6379/0")
+    return _redis_url_for_test_db(base_url)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def configure_test_redis_environment(redis_test_url: str):
+    """Point test-time Redis consumers to the dedicated test database."""
+    previous_redis_url = os.environ.get("REDIS_URL")
+    previous_plugin_redis_url = os.environ.get("RAG2F__PLUGINS__RAG2F_DEEP_THOUGHT__REDIS_URL")
+
+    os.environ["REDIS_URL"] = redis_test_url
+    os.environ["RAG2F__PLUGINS__RAG2F_DEEP_THOUGHT__REDIS_URL"] = redis_test_url
+
+    try:
+        yield
+    finally:
+        if previous_redis_url is None:
+            os.environ.pop("REDIS_URL", None)
+        else:
+            os.environ["REDIS_URL"] = previous_redis_url
+
+        if previous_plugin_redis_url is None:
+            os.environ.pop("RAG2F__PLUGINS__RAG2F_DEEP_THOUGHT__REDIS_URL", None)
+        else:
+            os.environ["RAG2F__PLUGINS__RAG2F_DEEP_THOUGHT__REDIS_URL"] = previous_plugin_redis_url
+
+
+@pytest.fixture(scope="session")
+def redis_test_client(redis_test_url: str):
+    """Return a Redis client bound to DB 10 and keep it clean for the suite."""
+    redis = pytest.importorskip("redis")
+    client = redis.Redis.from_url(redis_test_url, decode_responses=True)
+    try:
+        client.ping()
+    except redis.RedisError as exc:
+        pytest.skip(f"Redis sidecar unavailable for tests: {exc}")
+
+    client.flushdb()
+    try:
+        yield client
+    finally:
+        client.flushdb()
+        client.close()
 
 
 @pytest.fixture(autouse=True)

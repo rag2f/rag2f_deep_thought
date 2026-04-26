@@ -7,12 +7,12 @@ from rag2f.core.xfiles import QuerySpec
 
 
 @pytest.mark.asyncio
-async def test_end_to_end_instance_persists_and_searches_embeddings(
+async def test_end_to_end_instance_queues_embedding_then_searches_after_worker(
     monkeypatch,
     tmp_path,
     static_embedder_factory,
 ):
-    """A real RAG2F instance stores embeddings during ingest and uses them in retrieval."""
+    """A real RAG2F instance stores raw input, queues embedding, then retrieves it."""
     db_path = tmp_path / "end_to_end.duckdb"
     monkeypatch.setenv("RAG2F__RAG2F__EMBEDDER_DEFAULT", "fake_end_to_end_embedder")
     monkeypatch.setenv("RAG2F__PLUGINS__RAG2F_OPENAI_EMBEDDER__API_KEY", "test-key")
@@ -29,6 +29,7 @@ async def test_end_to_end_instance_persists_and_searches_embeddings(
         "plugins": {
             "rag2f_deep_thought": {
                 "db_path": str(db_path),
+                "flux_queue_backend": "memory",
             },
             "rag2f_openai_embedder": {
                 "api_key": "test-key",
@@ -65,12 +66,38 @@ async def test_end_to_end_instance_persists_and_searches_embeddings(
     assert repository is not None
 
     documents = repository.find(
-        QuerySpec(select=["text", "embedding"], order_by=["text"], limit=10)
+        QuerySpec(select=["text", "embedding", "flux_task_id"], order_by=["text"], limit=10)
+    )
+    documents_by_text = {document["text"]: document for document in documents}
+
+    assert documents_by_text["alpha document"]["embedding"] is None
+    assert documents_by_text["beta document"]["embedding"] is None
+    assert documents_by_text["alpha document"]["flux_task_id"]
+    assert documents_by_text["beta document"]["flux_task_id"]
+
+    first_status = rag2f.flux_capacitor.get_status(
+        documents_by_text["alpha document"]["flux_task_id"]
+    )
+    assert first_status.exists
+    assert first_status.status == "pending"
+
+    processed_tasks = 0
+    while rag2f.flux_capacitor.run_once(worker_id="test-worker"):
+        processed_tasks += 1
+
+    assert processed_tasks == 2
+
+    documents = repository.find(
+        QuerySpec(select=["text", "embedding", "flux_task_id"], order_by=["text"], limit=10)
     )
     documents_by_text = {document["text"]: document for document in documents}
 
     assert documents_by_text["alpha document"]["embedding"] == pytest.approx([1.0, 0.0, 0.0])
     assert documents_by_text["beta document"]["embedding"] == pytest.approx([0.0, 1.0, 0.0])
+    assert (
+        rag2f.flux_capacitor.get_status(documents_by_text["alpha document"]["flux_task_id"]).status
+        == "completed"
+    )
 
     retrieve = rag2f.indiana_jones.execute_retrieve("alpha query", k=2)
     assert retrieve.is_ok()
