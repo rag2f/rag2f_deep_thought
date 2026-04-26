@@ -143,3 +143,4 @@ src/*/_version.py
 .ruff_cache/
 
 otherprojects/
+wiki/

@@ -1,9 +1,16 @@
 {
   "name": "${localWorkspaceFolderBasename} Devcontainer",
-  "image": "python:3.12",
-  "mounts": [
-    "source=${localWorkspaceFolderBasename}-venv,target=/workspaces/${localWorkspaceFolderBasename}/.venv,type=volume"
+  "dockerComposeFile": [
+    "docker-compose.yml"
   ],
+  "service": "workspace",
+  "runServices": [
+    "workspace",
+    "redis"
+  ],
+  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+  "overrideCommand": false,
+  "initializeCommand": "bash scripts/write-devcontainer-compose-env.sh \"${localWorkspaceFolder}\" \"${localWorkspaceFolderBasename}\"",
   "features": {
     "ghcr.io/devcontainers/features/common-utils:2": {
       "version": "latest"
@@ -13,7 +20,7 @@
       "moby": false
     },
     "ghcr.io/devcontainers/features/python:1": {
-    "version": "3.12"
+      "version": "3.12"
     }
   },
   "customizations": {
@@ -39,11 +46,23 @@
       }
     }
   },
+  "forwardPorts": [
+    6379
+  ],
+  "portsAttributes": {
+    "6379": {
+      "label": "Redis 8 sidecar",
+      "onAutoForward": "ignore"
+    }
+  },
   "postCreateCommand": "(sudo chown -R vscode:vscode /workspaces/${localWorkspaceFolderBasename}/.venv 2>/dev/null || true) && git add --renormalize . && bash scripts/bootstrap-venv.sh",
   "postStartCommand": ". .venv/bin/activate && pip install uv && uv pip install -e . --index-url https://pypi.org/simple/ --extra-index-url https://test.pypi.org/simple/ --index-strategy unsafe-best-match --no-build-isolation && pre-commit install",
   "remoteUser": "vscode",
-  "containerEnv": {
-    "PYTHONPATH": "/workspaces/${localWorkspaceFolderBasename}/src",
-    "PYTEST_RICH": "1"
+  "remoteEnv": {
+    "PYTHONPATH": "${containerEnv:PYTHONPATH}",
+    "PYTEST_RICH": "${containerEnv:PYTEST_RICH}",
+    "REDIS_HOST": "${containerEnv:REDIS_HOST}",
+    "REDIS_PORT": "${containerEnv:REDIS_PORT}",
+    "REDIS_URL": "${containerEnv:REDIS_URL}"
   }
 }

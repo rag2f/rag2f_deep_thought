@@ -52,3 +52,20 @@ Fallback behavior:
 
 - `.github/workflows/ci-dev-testpypi.yml`: validates structure, builds, and publishes dev versions to TestPyPI
 - `.github/workflows/release-tags.yml`: builds from tags, publishes to PyPI, creates GitHub Releases
+
+## Devcontainer services
+
+The devcontainer starts two services through Docker Compose:
+
+- `workspace`: the existing Python 3.12 development container with the same bootstrap scripts and `.venv` volume
+- `redis`: a Redis 8 sidecar pinned to `redis:8.6.2`, which is the latest stable Redis 8 tag at the time of writing
+
+At startup, `initializeCommand` runs `scripts/write-devcontainer-compose-env.sh` on the host and generates `.devcontainer/.env` from the current workspace path and basename. This keeps the Docker Compose pattern reusable across repositories while preserving the original lifecycle commands in `devcontainer.json`.
+
+Inside the devcontainer, Redis is already available at:
+
+```text
+redis://:rag2f-devcontainer-redis@redis:6379/0
+```
+
+The shared Redis settings live in `.devcontainer/devcontainer.env`. The generated workspace-specific Compose variables live in `.devcontainer/.env`. After pulling changes to the devcontainer configuration, rebuild the container so Compose recreates the sidecar and refreshes the generated workspace settings.

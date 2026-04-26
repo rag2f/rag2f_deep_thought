@@ -1,0 +1,44 @@
+services:
+  workspace:
+    image: python:3.12
+    command: sleep infinity
+    volumes:
+      - type: bind
+        source: ${WORKSPACE_PATH}
+        target: /workspaces/${WORKSPACE_BASENAME}
+      - type: volume
+        source: workspace-venv
+        target: /workspaces/${WORKSPACE_BASENAME}/.venv
+    env_file:
+      - devcontainer.env
+    environment:
+      PYTHONPATH: ${WORKSPACE_PYTHONPATH}
+      PYTEST_RICH: ${WORKSPACE_PYTEST_RICH}
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:8.6.2
+    restart: unless-stopped
+    command:
+      - /bin/sh
+      - -c
+      - exec redis-server --appendonly yes --requirepass "$${REDIS_PASSWORD}"
+    env_file:
+      - devcontainer.env
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - redis-cli -a "$${REDIS_PASSWORD}" ping | grep PONG
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    volumes:
+      - redis-data:/data
+
+volumes:
+  workspace-venv:
+    name: ${WORKSPACE_VENV_VOLUME}
+  redis-data:
